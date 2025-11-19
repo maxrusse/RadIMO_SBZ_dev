@@ -858,7 +858,12 @@ def _try_configured_fallback(active_df: pd.DataFrame, current_column: str, modal
     return None, current_column
 
 
-def get_active_df_for_role(active_df: pd.DataFrame, role: str, modality: str):
+def get_active_df_for_role(
+    active_df: pd.DataFrame,
+    role: str,
+    modality: str,
+    allow_fallback: bool = True,
+):
     role_map = {
         'normal':  'Normal',
         'notfall': 'Notfall',
@@ -880,12 +885,14 @@ def get_active_df_for_role(active_df: pd.DataFrame, role: str, modality: str):
         filtered_df = None
         used_column = primary_column
 
-    if filtered_df is None:
+    if filtered_df is None and allow_fallback:
         filtered_df, used_column = _try_configured_fallback(active_df, primary_column, modality)
 
-    if filtered_df is None:
-        filtered_df = _attempt_column_selection(active_df, 'Normal', modality)
-        used_column = 'Normal'
+    if filtered_df is None and allow_fallback:
+        normal_df = _attempt_column_selection(active_df, 'Normal', modality)
+        if normal_df is not None:
+            filtered_df = normal_df
+            used_column = 'Normal'
 
     if filtered_df is None:
         return active_df.iloc[0:0], primary_column
@@ -898,7 +905,12 @@ def get_active_df_for_role(active_df: pd.DataFrame, role: str, modality: str):
 
     return filtered_df, used_column
 
-def _select_worker_for_modality(current_dt: datetime, role='normal', modality=default_modality):
+def _select_worker_for_modality(
+    current_dt: datetime,
+    role='normal',
+    modality=default_modality,
+    allow_fallback: bool = True,
+):
     d = modality_data[modality]
     if d['working_hours_df'] is None:
         selection_logger.info(f"No working hours data for modality {modality}")
@@ -914,7 +926,12 @@ def _select_worker_for_modality(current_dt: datetime, role='normal', modality=de
         selection_logger.info(f"No active workers at time {tnow} for modality {modality}")
         return None
 
-    filtered_df, used_column = get_active_df_for_role(active_df, role, modality)
+    filtered_df, used_column = get_active_df_for_role(
+        active_df,
+        role,
+        modality,
+        allow_fallback=allow_fallback,
+    )
     
     if filtered_df.empty:
         selection_logger.info(f"No workers found for role {role} (using column {used_column}) at time {tnow}")
@@ -951,7 +968,12 @@ def _select_worker_for_modality(current_dt: datetime, role='normal', modality=de
     return candidate, used_column
 
 
-def get_next_available_worker(current_dt: datetime, role='normal', modality=default_modality):
+def get_next_available_worker(
+    current_dt: datetime,
+    role='normal',
+    modality=default_modality,
+    allow_fallback: bool = True,
+):
     visited = set()
 
     def _attempt_modality(target_modality: str):
@@ -1388,14 +1410,33 @@ def assign_worker_api(modality, role):
         return jsonify({"error": "Invalid modality"}), 400
     return _assign_worker(modality, role)
 
-def _assign_worker(modality: str, role: str):
+
+@app.route('/api/<modality>/<role>/strict', methods=['GET'])
+def assign_worker_strict_api(modality, role):
+    modality = modality.lower()
+    if modality not in modality_data:
+        return jsonify({"error": "Invalid modality"}), 400
+    return _assign_worker(modality, role, allow_fallback=False)
+
+def _assign_worker(modality: str, role: str, allow_fallback: bool = True):
     try:
         requested_data = modality_data[modality]
         now = get_local_berlin_now()
-        selection_logger.info(f"Assignment request: modality={modality}, role={role}, time={now.strftime('%H:%M:%S')}")
+        selection_logger.info(
+            "Assignment request: modality=%s, role=%s, strict=%s, time=%s",
+            modality,
+            role,
+            not allow_fallback,
+            now.strftime('%H:%M:%S'),
+        )
 
         with lock:
-            result = get_next_available_worker(now, role=role, modality=modality)
+            result = get_next_available_worker(
+                now,
+                role=role,
+                modality=modality,
+                allow_fallback=allow_fallback,
+            )
             if result is not None:
                 candidate, used_column, source_modality = result
                 actual_modality = source_modality or modality
@@ -1467,6 +1508,8 @@ def _assign_worker(modality: str, role: str):
                     "modality_used": actual_modality,
                     "skill_used": actual_skill,
                     "modality_requested": modality,
+                    "fallback_allowed": allow_fallback,
+                    "strict_request": not allow_fallback,
                 }
                 for skill in SKILL_COLUMNS:
                     result_data[skill] = skill_counts.get(skill, {})
@@ -1476,14 +1519,22 @@ def _assign_worker(modality: str, role: str):
                 skill_counts = {skill: empty_counts.copy() for skill in SKILL_COLUMNS}
                 sum_counts = {w: 0 for w in d['draw_counts']}
 
+                message = (
+                    "Bitte nochmal klicken"
+                    if allow_fallback
+                    else "Keine Person in dieser Gruppe verfügbar"
+                )
+
                 result_data = {
                     "Draw Time": now.strftime('%H:%M:%S'),
-                    "Assigned Person": "Bitte nochmal klicken",
+                    "Assigned Person": message,
                     "Summe": sum_counts,
                     "Global": {},
                     "modality_requested": modality,
                     "modality_used": None,
                     "skill_used": None,
+                    "fallback_allowed": allow_fallback,
+                    "strict_request": not allow_fallback,
                 }
                 for skill in SKILL_COLUMNS:
                     result_data[skill] = skill_counts.get(skill, {})
