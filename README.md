@@ -334,11 +334,11 @@ Per-worker skill overrides with modality-specific configuration:
 
 ```yaml
 worker_skill_roster:
-  AAn:  # Alona Anzalone
+  AA:  # Any Arzt
     default:
       Msk: 1      # MSK specialist
 
-  AN:  # Andrea Nedelcu
+  AN:  # Any NewArzt
     default:
       Chest: 1    # Chest specialist
     ct:
@@ -555,11 +555,11 @@ shift_times:
 
 # Worker skill roster (NEW)
 worker_skill_roster:
-  AAn:  # Alona Anzalone
+  AAn:  # Any Arzt
     default:
       Msk: 1      # MSK specialist
 
-  AN:  # Andrea Nedelcu
+  AN:  # Any Newarzt
     default:
       Chest: 1    # Chest specialist
     ct:
