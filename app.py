@@ -456,6 +456,8 @@ def inject_modality_settings():
         'modality_order': allowed_modalities,
         'modality_labels': modality_labels,
         'skill_definitions': SKILL_TEMPLATES,
+        'skill_order': SKILL_COLUMNS,
+        'skill_labels': {s['name']: s['label'] for s in SKILL_TEMPLATES},
     }
 
 
@@ -468,6 +470,42 @@ def normalize_modality(modality_value: Optional[str]) -> str:
 
 def resolve_modality_from_request() -> str:
     return normalize_modality(request.values.get('modality'))
+
+
+def normalize_skill(skill_value: Optional[str]) -> str:
+    """Validate and normalize skill parameter"""
+    if not skill_value:
+        return SKILL_COLUMNS[0] if SKILL_COLUMNS else 'Normal'
+    # Try exact match first
+    if skill_value in SKILL_COLUMNS:
+        return skill_value
+    # Try case-insensitive match
+    skill_value_title = skill_value.title()
+    if skill_value_title in SKILL_COLUMNS:
+        return skill_value_title
+    # Default to first skill
+    return SKILL_COLUMNS[0] if SKILL_COLUMNS else 'Normal'
+
+
+def get_available_modalities_for_skill(skill: str) -> dict:
+    """Check which modalities have active workers for this skill"""
+    available = {}
+    tnow = get_local_berlin_now().time()
+
+    for modality in allowed_modalities:
+        d = modality_data[modality]
+        if d['working_hours_df'] is not None:
+            active_df = d['working_hours_df'][
+                (d['working_hours_df']['start_time'] <= tnow) &
+                (d['working_hours_df']['end_time'] >= tnow)
+            ]
+            available[modality] = bool(
+                (skill in active_df.columns) and (active_df[skill].sum() > 0)
+            )
+        else:
+            available[modality] = False
+
+    return available
 
 # -----------------------------------------------------------
 # TIME / DATE HELPERS (unchanged)
@@ -796,6 +834,13 @@ def _apply_minimum_balancer(filtered_df: pd.DataFrame, column: str, modality: st
 
 
 def _should_balance_via_fallback(filtered_df: pd.DataFrame, column: str, modality: str) -> bool:
+    """
+    Check if fallback should be triggered based on workload imbalance.
+
+    Uses work-hour-adjusted ratios (weighted_assignments / hours_worked_so_far)
+    to handle overlapping shifts correctly. This ensures imbalance detection
+    is consistent with worker selection logic.
+    """
     if not isinstance(column, str):
         return False
     if filtered_df.empty or not BALANCER_SETTINGS.get('enabled', True):
@@ -811,19 +856,34 @@ def _should_balance_via_fallback(filtered_df: pd.DataFrame, column: str, modalit
     if not skill_counts:
         return False
 
-    worker_counts = [
-        _get_effective_assignment_load(worker, column, modality, skill_counts)
-        for worker in filtered_df['PPL'].unique()
-    ]
-    if len(worker_counts) < 2:
+    # Calculate work hours till now for each worker
+    current_dt = get_local_berlin_now()
+    hours_map = calculate_work_hours_now(current_dt, modality)
+
+    # Calculate weighted ratios (assignments per hour worked)
+    worker_ratios = []
+    for worker in filtered_df['PPL'].unique():
+        canonical_id = get_canonical_worker_id(worker)
+        weighted_assignments = get_global_weighted_count(canonical_id)
+        hours_worked = hours_map.get(canonical_id, 0)
+
+        # Skip workers who haven't started their shift yet
+        if hours_worked <= 0:
+            continue
+
+        ratio = weighted_assignments / hours_worked
+        worker_ratios.append(ratio)
+
+    if len(worker_ratios) < 2:
         return False
 
-    max_count = max(worker_counts)
-    min_count = min(worker_counts)
-    if max_count == 0:
+    max_ratio = max(worker_ratios)
+    min_ratio = min(worker_ratios)
+    if max_ratio == 0:
         return False
 
-    imbalance = (max_count - min_count) / max_count
+    # Calculate imbalance based on ratios (consistent with worker selection)
+    imbalance = (max_ratio - min_ratio) / max_ratio
     return imbalance >= (threshold_pct / 100.0)
 
 
@@ -1571,6 +1631,32 @@ def index():
         modality=modality
     )
 
+
+@app.route('/by-skill')
+def index_by_skill():
+    """
+    Skill-based view: navigate by skill, see all modalities as buttons
+    """
+    skill = request.args.get('skill', SKILL_COLUMNS[0] if SKILL_COLUMNS else 'Normal')
+    skill = normalize_skill(skill)
+
+    # Determine available modalities for this skill (check working hours)
+    available_modalities_dict = get_available_modalities_for_skill(skill)
+
+    # Get info texts from first modality (they're typically the same)
+    info_texts = []
+    if allowed_modalities:
+        first_modality = allowed_modalities[0]
+        info_texts = modality_data[first_modality].get('info_texts', [])
+
+    return render_template(
+        'index_by_skill.html',
+        skill=skill,
+        available_modalities=available_modalities_dict,
+        info_texts=info_texts
+    )
+
+
 def get_admin_password():
     try:
         with open("config.yaml", "r") as f:
@@ -1579,6 +1665,173 @@ def get_admin_password():
     except Exception as e:
         selection_logger.info("Error loading config.yaml:", e)
         return ""
+
+def run_operational_checks(context: str = 'unknown', force: bool = False) -> dict:
+    """
+    Run operational readiness checks for the system.
+
+    Args:
+        context: Context string describing where checks are being run from
+        force: Force re-run even if cached (currently always runs)
+
+    Returns:
+        Dictionary with:
+        - results: list of check results (name, status, detail)
+        - context: the context string
+        - timestamp: ISO format timestamp
+    """
+    results = []
+    now = get_local_berlin_now().isoformat()
+
+    # Check 1: Config file exists and is readable
+    try:
+        with open("config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        results.append({
+            'name': 'Config File',
+            'status': 'OK',
+            'detail': 'config.yaml is readable and valid YAML'
+        })
+    except Exception as e:
+        results.append({
+            'name': 'Config File',
+            'status': 'ERROR',
+            'detail': f'Failed to load config.yaml: {str(e)}'
+        })
+
+    # Check 2: Admin password is set (not default)
+    try:
+        admin_pw = get_admin_password()
+        if not admin_pw:
+            results.append({
+                'name': 'Admin Password',
+                'status': 'WARNING',
+                'detail': 'Admin password is not set in config.yaml'
+            })
+        elif admin_pw == 'change_pw_for_live':
+            results.append({
+                'name': 'Admin Password',
+                'status': 'WARNING',
+                'detail': 'Admin password is still set to default value - change for production!'
+            })
+        else:
+            results.append({
+                'name': 'Admin Password',
+                'status': 'OK',
+                'detail': 'Admin password is configured'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Admin Password',
+            'status': 'ERROR',
+            'detail': f'Failed to check admin password: {str(e)}'
+        })
+
+    # Check 3: Upload folder exists and is writable
+    try:
+        upload_folder = app.config.get('UPLOAD_FOLDER', 'uploads')
+        if not os.path.exists(upload_folder):
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'WARNING',
+                'detail': f'Upload folder "{upload_folder}" does not exist (will be created on upload)'
+            })
+        elif not os.access(upload_folder, os.W_OK):
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'ERROR',
+                'detail': f'Upload folder "{upload_folder}" is not writable'
+            })
+        else:
+            file_count = len([f for f in os.listdir(upload_folder) if f.endswith('.xlsx')])
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'OK',
+                'detail': f'Upload folder "{upload_folder}" is writable ({file_count} Excel files found)'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Upload Folder',
+            'status': 'ERROR',
+            'detail': f'Failed to check upload folder: {str(e)}'
+        })
+
+    # Check 4: Modalities configured
+    try:
+        modality_count = len(allowed_modalities)
+        if modality_count == 0:
+            results.append({
+                'name': 'Modalities',
+                'status': 'ERROR',
+                'detail': 'No modalities configured in config.yaml'
+            })
+        else:
+            results.append({
+                'name': 'Modalities',
+                'status': 'OK',
+                'detail': f'{modality_count} modalities configured: {", ".join(allowed_modalities)}'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Modalities',
+            'status': 'ERROR',
+            'detail': f'Failed to check modalities: {str(e)}'
+        })
+
+    # Check 5: Skills configured
+    try:
+        skill_count = len(SKILL_COLUMNS)
+        if skill_count == 0:
+            results.append({
+                'name': 'Skills',
+                'status': 'ERROR',
+                'detail': 'No skills configured in config.yaml'
+            })
+        else:
+            results.append({
+                'name': 'Skills',
+                'status': 'OK',
+                'detail': f'{skill_count} skills configured: {", ".join(SKILL_COLUMNS)}'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Skills',
+            'status': 'ERROR',
+            'detail': f'Failed to check skills: {str(e)}'
+        })
+
+    # Check 6: Worker data loaded
+    try:
+        total_workers = 0
+        for mod in allowed_modalities:
+            d = modality_data.get(mod, {})
+            if d.get('working_hours_df') is not None:
+                total_workers += len(d['working_hours_df']['PPL'].unique())
+
+        if total_workers == 0:
+            results.append({
+                'name': 'Worker Data',
+                'status': 'WARNING',
+                'detail': 'No worker data loaded - upload an Excel file to get started'
+            })
+        else:
+            results.append({
+                'name': 'Worker Data',
+                'status': 'OK',
+                'detail': f'{total_workers} workers loaded across all modalities'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Worker Data',
+            'status': 'ERROR',
+            'detail': f'Failed to check worker data: {str(e)}'
+        })
+
+    return {
+        'results': results,
+        'context': context,
+        'timestamp': now
+    }
 
 # --- Create a decorator to protect admin routes:
 def admin_required(f):
@@ -2049,11 +2302,25 @@ def get_entry():
 
 @app.route('/api/quick_reload', methods=['GET'])
 def quick_reload():
+    # Check if this is a skill-based view request
+    skill_param = request.args.get('skill')
+
+    if skill_param:
+        # Skill-based view: return available modalities for this skill
+        skill = normalize_skill(skill_param)
+        available_modalities_dict = get_available_modalities_for_skill(skill)
+        checks = run_operational_checks('reload', force=True)
+        return jsonify({
+            "available_modalities": available_modalities_dict,
+            "operational_checks": checks,
+        })
+
+    # Modality-based view (existing logic)
     modality = resolve_modality_from_request()
     d = modality_data[modality]
     now = get_local_berlin_now()
     checks = run_operational_checks('reload', force=True)
-    
+
     # Determine available buttons based on currently active working hours
     available_buttons = {SKILL_SLUG_MAP[skill]: False for skill in SKILL_COLUMNS}
     if d['working_hours_df'] is not None:
