@@ -317,6 +317,38 @@
     </div>
   </div>
 
+  <!-- Force Refresh Today Section -->
+  <div class="card">
+    <h2>🔄 Force Refresh (Heute - NOTFALL)</h2>
+
+    <div class="info-box" style="background: #fff3cd; border-color: #f39c12;">
+      <h3>⚠️ Warnung: Alle Zuteilungen werden gelöscht!</h3>
+      <p>Diese Funktion überschreibt den <strong>heutigen</strong> Dienstplan komplett:</p>
+      <ul style="margin-left: 1.5rem; margin-top: 0.5rem;">
+        <li style="color: #856404;"><strong>Alle bisherigen Zuteilungen werden gelöscht</strong></li>
+        <li style="color: #856404;"><strong>Alle Zählerstände werden zurückgesetzt</strong></li>
+        <li>Nur für Notfall-Änderungen verwenden!</li>
+        <li>Besser: Nächsten Tag mit Preload vorbereiten</li>
+      </ul>
+    </div>
+
+    <div class="upload-section" style="border-color: #f39c12;">
+      <form id="force-refresh-form" enctype="multipart/form-data">
+        <div class="form-group">
+          <label for="force-refresh-csv-file">📁 Neue Medweb CSV Datei:</label>
+          <input type="file" id="force-refresh-csv-file" name="file" accept=".csv" required>
+          <small style="color: #666; display: block; margin-top: 0.5rem;">
+            Lädt Daten für <strong>HEUTE</strong> und löscht alle bisherigen Zuteilungen!
+          </small>
+        </div>
+
+        <button type="submit" class="btn-primary" id="force-refresh-btn" style="background: #f39c12;" onclick="return confirm('WARNUNG: Alle heutigen Zuteilungen werden gelöscht! Fortfahren?');">
+          🔄 HEUTE Neu Laden (Notfall)
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- Operational Checks -->
   {% if operational_checks %}
   <div class="card">
@@ -541,6 +573,68 @@
         messageContainer.scrollIntoView({ behavior: 'smooth' });
         preloadBtn.disabled = false;
         preloadBtn.textContent = '🔮 Nächsten Arbeitstag Preloaden';
+      }
+    });
+
+    // Handle force refresh form submission
+    document.getElementById('force-refresh-form').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const form = e.target;
+      const formData = new FormData(form);
+      const forceBtn = document.getElementById('force-refresh-btn');
+      const messageContainer = document.getElementById('message-container');
+
+      // Disable button
+      forceBtn.disabled = true;
+      forceBtn.textContent = '⏳ Force Refresh läuft...';
+
+      try {
+        const response = await fetch('/force-refresh-today', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          // Success
+          messageContainer.innerHTML = `
+            <div class="message success">
+              ✅ ${result.message}<br>
+              <strong>Modalitäten geladen:</strong> ${result.modalities_loaded.join(', ')}<br>
+              <strong>Workers gefunden:</strong> ${result.total_workers}<br>
+              <strong style="color: #f39c12;">⚠️ ${result.warning}</strong>
+            </div>
+          `;
+
+          // Scroll to message
+          messageContainer.scrollIntoView({ behavior: 'smooth' });
+
+          // Reload page after 2 seconds to show updated stats
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
+        } else {
+          // Error
+          messageContainer.innerHTML = `
+            <div class="message error">
+              ❌ Fehler: ${result.error || result.message || 'Unbekannter Fehler'}
+            </div>
+          `;
+          messageContainer.scrollIntoView({ behavior: 'smooth' });
+          forceBtn.disabled = false;
+          forceBtn.textContent = '🔄 HEUTE Neu Laden (Notfall)';
+        }
+      } catch (error) {
+        messageContainer.innerHTML = `
+          <div class="message error">
+            ❌ Netzwerkfehler: ${error.message}
+          </div>
+        `;
+        messageContainer.scrollIntoView({ behavior: 'smooth' });
+        forceBtn.disabled = false;
+        forceBtn.textContent = '🔄 HEUTE Neu Laden (Notfall)';
       }
     });
   </script>

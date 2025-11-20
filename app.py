@@ -26,6 +26,8 @@ from typing import Dict, Any, Optional
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 os.makedirs('logs', exist_ok=True)
 
@@ -47,7 +49,13 @@ app.secret_key = 'your-maxsecret-key'
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
 
+# Master CSV path for auto-preload
+MASTER_CSV_PATH = os.path.join(app.config['UPLOAD_FOLDER'], 'master_medweb.csv')
+
 lock = Lock()
+
+# Scheduler for auto-preload (initialized later after modality_data is loaded)
+scheduler = None
 
 # -----------------------------------------------------------
 # Global constants & modality-/skill-specific factors
@@ -760,6 +768,32 @@ def get_next_workday(from_date: Optional[datetime] = None) -> datetime:
         next_day += timedelta(days=1)
 
     return datetime.combine(next_day, time(0, 0))
+
+def auto_preload_job():
+    """
+    Background job that runs daily at 7:30 AM to preload next workday.
+    Uses master CSV if available.
+    """
+    try:
+        if not os.path.exists(MASTER_CSV_PATH):
+            selection_logger.warning(f"Auto-preload skipped: No master CSV at {MASTER_CSV_PATH}")
+            return
+
+        selection_logger.info(f"Starting auto-preload from {MASTER_CSV_PATH}")
+
+        result = preload_next_workday(MASTER_CSV_PATH, APP_CONFIG)
+
+        if result['success']:
+            selection_logger.info(
+                f"Auto-preload successful: {result['target_date']}, "
+                f"modalities={result['modalities_loaded']}, "
+                f"workers={result['total_workers']}"
+            )
+        else:
+            selection_logger.error(f"Auto-preload failed: {result['message']}")
+
+    except Exception as e:
+        selection_logger.error(f"Auto-preload exception: {str(e)}", exc_info=True)
 
 def preload_next_workday(csv_path: str, config: dict) -> dict:
     """
@@ -2214,6 +2248,10 @@ def upload_file():
                 d['info_texts'] = []
                 d['last_uploaded_filename'] = f"medweb_{target_date.strftime('%Y%m%d')}.csv"
 
+            # Save to master CSV for auto-preload
+            shutil.copy2(csv_path, MASTER_CSV_PATH)
+            selection_logger.info(f"Master CSV updated: {MASTER_CSV_PATH}")
+
             # Clean up temp file
             os.remove(csv_path)
 
@@ -2318,6 +2356,11 @@ def preload_next_day():
         # Preload next workday
         result = preload_next_workday(csv_path, APP_CONFIG)
 
+        # Save to master CSV for future auto-preload
+        if result['success']:
+            shutil.copy2(csv_path, MASTER_CSV_PATH)
+            selection_logger.info(f"Master CSV updated via preload: {MASTER_CSV_PATH}")
+
         # Clean up temp file
         if os.path.exists(csv_path):
             os.remove(csv_path)
@@ -2331,6 +2374,93 @@ def preload_next_day():
         if os.path.exists(csv_path):
             os.remove(csv_path)
         return jsonify({"error": f"Fehler beim Preload: {str(e)}"}), 500
+
+
+@app.route('/force-refresh-today', methods=['POST'])
+@admin_required
+def force_refresh_today():
+    """
+    Force refresh current day's schedule from new CSV.
+    Overwrites all current data and resets counters.
+    Use for emergency changes during the day.
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "Keine Datei ausgewählt"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Keine Datei ausgewählt"}), 400
+
+    if not file.filename.lower().endswith('.csv'):
+        return jsonify({"error": "Ungültiger Dateityp. Bitte eine CSV-Datei hochladen."}), 400
+
+    # Save CSV temporarily
+    csv_path = os.path.join(app.config['UPLOAD_FOLDER'], 'medweb_force_refresh.csv')
+    try:
+        file.save(csv_path)
+
+        # Use TODAY's date
+        target_date = get_local_berlin_now()
+
+        # Parse medweb CSV
+        modality_dfs = build_working_hours_from_medweb(
+            csv_path,
+            target_date,
+            APP_CONFIG
+        )
+
+        if not modality_dfs:
+            return jsonify({"error": f"Keine SBZ-Daten für {target_date.strftime('%Y-%m-%d')} gefunden"}), 400
+
+        # CRITICAL: Reset ALL counters and apply to modality_data
+        for modality, df in modality_dfs.items():
+            d = modality_data[modality]
+
+            # Reset counters (this loses all assignment history!)
+            d['draw_counts'] = {}
+            d['skill_counts'] = {skill: {} for skill in SKILL_COLUMNS}
+            d['WeightedCounts'] = {}
+            global_worker_data['weighted_counts_per_mod'][modality] = {}
+            global_worker_data['assignments_per_mod'][modality] = {}
+
+            # Load DataFrame
+            d['working_hours_df'] = df
+
+            # Initialize counters
+            for worker in df['PPL'].unique():
+                d['draw_counts'][worker] = 0
+                d['WeightedCounts'][worker] = 0.0
+                for skill in SKILL_COLUMNS:
+                    if skill not in d['skill_counts']:
+                        d['skill_counts'][skill] = {}
+                    d['skill_counts'][skill][worker] = 0
+
+            # Set info texts
+            d['info_texts'] = []
+            d['last_uploaded_filename'] = f"force_refresh_{target_date.strftime('%Y%m%d')}.csv"
+
+        # Save to master CSV for future auto-preload
+        shutil.copy2(csv_path, MASTER_CSV_PATH)
+        selection_logger.warning(
+            f"Force refresh executed for {target_date.strftime('%Y-%m-%d')}, "
+            f"all counters reset! Modalities: {list(modality_dfs.keys())}"
+        )
+
+        # Clean up temp file
+        os.remove(csv_path)
+
+        return jsonify({
+            "success": True,
+            "message": f"Force Refresh erfolgreich für {target_date.strftime('%Y-%m-%d')} (ALLE Zählerstände wurden zurückgesetzt!)",
+            "modalities_loaded": list(modality_dfs.keys()),
+            "total_workers": sum(len(df) for df in modality_dfs.values()),
+            "warning": "Alle bisherigen Zuteilungen wurden gelöscht!"
+        })
+
+    except Exception as e:
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+        return jsonify({"error": f"Fehler beim Force Refresh: {str(e)}"}), 500
 
 
 @app.route('/api/<modality>/<role>', methods=['GET'])
@@ -2754,6 +2884,26 @@ def timetable():
 
 
 app.config['DEBUG'] = True
+
+# Initialize scheduler for auto-preload
+def init_scheduler():
+    """Initialize and start background scheduler for auto-preload."""
+    global scheduler
+    if scheduler is None:
+        scheduler = BackgroundScheduler()
+        # Run daily at 7:30 AM (Berlin time)
+        scheduler.add_job(
+            auto_preload_job,
+            CronTrigger(hour=7, minute=30, timezone='Europe/Berlin'),
+            id='auto_preload',
+            name='Auto-preload next workday',
+            replace_existing=True
+        )
+        scheduler.start()
+        selection_logger.info("Scheduler started: Auto-preload will run daily at 7:30 AM")
+
+# Start scheduler when app starts
+init_scheduler()
 
 if __name__ == '__main__':
     app.run()
