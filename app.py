@@ -9,7 +9,7 @@ from flask import (
 )
 from flask import session
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import pytz
 import os
 import copy
@@ -735,6 +735,104 @@ def build_working_hours_from_medweb(
         result[modality] = df
 
     return result
+
+def get_next_workday(from_date: Optional[datetime] = None) -> datetime:
+    """
+    Calculate next workday.
+    - If Friday: return Monday
+    - Otherwise: return next day
+    - Skips weekends
+    """
+    if from_date is None:
+        from_date = get_local_berlin_now()
+
+    # If datetime, convert to date
+    if hasattr(from_date, 'date'):
+        current_date = from_date.date()
+    else:
+        current_date = from_date
+
+    # Calculate next day
+    next_day = current_date + timedelta(days=1)
+
+    # If next day is Saturday (5) or Sunday (6), move to Monday
+    while next_day.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        next_day += timedelta(days=1)
+
+    return datetime.combine(next_day, time(0, 0))
+
+def preload_next_workday(csv_path: str, config: dict) -> dict:
+    """
+    Preload schedule for next workday from medweb CSV.
+
+    Returns:
+        {
+            'success': bool,
+            'target_date': str,
+            'modalities_loaded': list,
+            'total_workers': int,
+            'message': str
+        }
+    """
+    try:
+        # Calculate next workday
+        next_day = get_next_workday()
+
+        # Parse medweb CSV
+        modality_dfs = build_working_hours_from_medweb(
+            csv_path,
+            next_day,
+            config
+        )
+
+        if not modality_dfs:
+            return {
+                'success': False,
+                'target_date': next_day.strftime('%Y-%m-%d'),
+                'message': f'Keine SBZ-Daten für {next_day.strftime('%Y-%m-%d')} gefunden'
+            }
+
+        # Reset all counters and apply to modality_data
+        for modality, df in modality_dfs.items():
+            d = modality_data[modality]
+
+            # Reset counters
+            d['draw_counts'] = {}
+            d['skill_counts'] = {skill: {} for skill in SKILL_COLUMNS}
+            d['WeightedCounts'] = {}
+            global_worker_data['weighted_counts_per_mod'][modality] = {}
+            global_worker_data['assignments_per_mod'][modality] = {}
+
+            # Load DataFrame
+            d['working_hours_df'] = df
+
+            # Initialize counters
+            for worker in df['PPL'].unique():
+                d['draw_counts'][worker] = 0
+                d['WeightedCounts'][worker] = 0.0
+                for skill in SKILL_COLUMNS:
+                    if skill not in d['skill_counts']:
+                        d['skill_counts'][skill] = {}
+                    d['skill_counts'][skill][worker] = 0
+
+            # Set info texts
+            d['info_texts'] = []
+            d['last_uploaded_filename'] = f"medweb_{next_day.strftime('%Y%m%d')}.csv"
+
+        return {
+            'success': True,
+            'target_date': next_day.strftime('%Y-%m-%d'),
+            'modalities_loaded': list(modality_dfs.keys()),
+            'total_workers': sum(len(df) for df in modality_dfs.values()),
+            'message': f'Preload erfolgreich für {next_day.strftime('%Y-%m-%d')}'
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'target_date': get_next_workday().strftime('%Y-%m-%d'),
+            'message': f'Fehler beim Preload: {str(e)}'
+        }
 
 def validate_excel_structure(df: pd.DataFrame, required_columns) -> (bool, str):
     # Rename column "PP" to "Privat" if it exists
@@ -2192,6 +2290,47 @@ def upload_file():
         modality_stats=modality_stats,
         operational_checks=checks,
     )
+
+
+@app.route('/preload-next-day', methods=['POST'])
+@admin_required
+def preload_next_day():
+    """
+    Preload schedule for next workday from stored medweb CSV.
+    - Friday → loads Monday
+    - Other days → loads tomorrow
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "Keine Datei ausgewählt"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Keine Datei ausgewählt"}), 400
+
+    if not file.filename.lower().endswith('.csv'):
+        return jsonify({"error": "Ungültiger Dateityp. Bitte eine CSV-Datei hochladen."}), 400
+
+    # Save CSV
+    csv_path = os.path.join(app.config['UPLOAD_FOLDER'], 'medweb_preload.csv')
+    try:
+        file.save(csv_path)
+
+        # Preload next workday
+        result = preload_next_workday(csv_path, APP_CONFIG)
+
+        # Clean up temp file
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+
+        if result['success']:
+            return jsonify(result)
+        else:
+            return jsonify(result), 400
+
+    except Exception as e:
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+        return jsonify({"error": f"Fehler beim Preload: {str(e)}"}), 500
 
 
 @app.route('/api/<modality>/<role>', methods=['GET'])

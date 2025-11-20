@@ -204,14 +204,54 @@ shift_times:
 # Config takes precedence over medweb mapping
 # -1 = excluded (never use), 0 = passive (fallback only), 1 = active (primary + fallback)
 worker_skill_roster:
-  # Example workers - add your workers here
-  # KRUE:
-  #   default:
-  #     Normal: 1
-  #     Notfall: 1
-  #     Privat: 0
-  #     Herz: 0
-  #     Msk: -1
-  #     Chest: 1
-  #   ct:
-  #     Notfall: 0  # Per-modality override
+  # Example: MSK specialist
+  AAn:  # Alona Anzalone
+    default:
+      Normal: 1
+      Notfall: 1
+      Privat: 0
+      Herz: 0
+      Msk: 1      # MSK specialist
+      Chest: 0
+
+  # Example: Chest specialist with CT Notfall only as fallback
+  AN:  # Andrea Nedelcu
+    default:
+      Normal: 1
+      Notfall: 1
+      Privat: 0
+      Herz: 0
+      Msk: 0
+      Chest: 1    # Chest specialist
+    ct:
+      Notfall: 0  # Only fallback for CT Notfall
+
+  # Example: Cardiac specialist
+  DEMO1:
+    default:
+      Normal: 1
+      Notfall: 1
+      Privat: 0
+      Herz: 1     # Cardiac specialist
+      Msk: 0
+      Chest: 0
+
+  # Example: Private patients only (PP role)
+  DEMO2:
+    default:
+      Normal: 0   # Only fallback
+      Notfall: 0  # Only fallback
+      Privat: 1   # Primary for private patients
+      Herz: 0
+      Msk: -1     # Never for MSK
+      Chest: -1   # Never for Chest
+
+  # Example: First month assistant (no Notfall)
+  DEMO3:
+    default:
+      Normal: 1
+      Notfall: 0  # Not allowed for emergencies yet
+      Privat: 0
+      Herz: 0
+      Msk: 0
+      Chest: 0
