@@ -1,6 +1,21 @@
 # SBZDashboard Integration Plan
 
-**Planning Document: Integrating SBZDashboard schedule generator with RadIMO SBZ worker assignment system**
+**⚠️ OBSOLETE DOCUMENT - Historical Planning Document**
+
+> **Status:** This document is **no longer current**. It was created during planning phase to explore integrating SBZDashboard's Excel generation logic into RadIMO.
+>
+> **What Actually Happened:** RadIMO implemented a **config-driven direct CSV ingestion** approach instead (Approach B from [INTEGRATION_COMPARISON.md](INTEGRATION_COMPARISON.md)), which proved superior to merging SBZDashboard code.
+>
+> **Current Documentation:**
+> - See [WORKFLOW.md](WORKFLOW.md) for current medweb CSV workflow
+> - See [INTEGRATION_COMPARISON.md](INTEGRATION_COMPARISON.md) for why config-driven approach was chosen
+> - See [README.md](../README.md) for current system overview
+>
+> **Preserved for:** Historical context and architectural decision reference
+
+---
+
+**Original Planning Document: Integrating SBZDashboard schedule generator with RadIMO SBZ worker assignment system**
 
 ---
 
