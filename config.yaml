@@ -265,7 +265,7 @@ shift_times:
 # -1 = excluded (never use), 0 = passive (fallback only), 1 = active (primary + fallback)
 worker_skill_roster:
   # Example: MSK specialist
-  AAn:  # Alona Anzalone
+  AA:  #  Any Arzt
     default:
       Normal: 1
       Notfall: 1
@@ -275,7 +275,7 @@ worker_skill_roster:
       Chest: 0
 
   # Example: Chest specialist with CT Notfall only as fallback
-  AN:  # Andrea Nedelcu
+  AN:  # Any Newarzt
     default:
       Normal: 1
       Notfall: 1
