@@ -834,6 +834,13 @@ def _apply_minimum_balancer(filtered_df: pd.DataFrame, column: str, modality: st
 
 
 def _should_balance_via_fallback(filtered_df: pd.DataFrame, column: str, modality: str) -> bool:
+    """
+    Check if fallback should be triggered based on workload imbalance.
+
+    Uses work-hour-adjusted ratios (weighted_assignments / hours_worked_so_far)
+    to handle overlapping shifts correctly. This ensures imbalance detection
+    is consistent with worker selection logic.
+    """
     if not isinstance(column, str):
         return False
     if filtered_df.empty or not BALANCER_SETTINGS.get('enabled', True):
@@ -849,19 +856,34 @@ def _should_balance_via_fallback(filtered_df: pd.DataFrame, column: str, modalit
     if not skill_counts:
         return False
 
-    worker_counts = [
-        _get_effective_assignment_load(worker, column, modality, skill_counts)
-        for worker in filtered_df['PPL'].unique()
-    ]
-    if len(worker_counts) < 2:
+    # Calculate work hours till now for each worker
+    current_dt = get_local_berlin_now()
+    hours_map = calculate_work_hours_now(current_dt, modality)
+
+    # Calculate weighted ratios (assignments per hour worked)
+    worker_ratios = []
+    for worker in filtered_df['PPL'].unique():
+        canonical_id = get_canonical_worker_id(worker)
+        weighted_assignments = get_global_weighted_count(canonical_id)
+        hours_worked = hours_map.get(canonical_id, 0)
+
+        # Skip workers who haven't started their shift yet
+        if hours_worked <= 0:
+            continue
+
+        ratio = weighted_assignments / hours_worked
+        worker_ratios.append(ratio)
+
+    if len(worker_ratios) < 2:
         return False
 
-    max_count = max(worker_counts)
-    min_count = min(worker_counts)
-    if max_count == 0:
+    max_ratio = max(worker_ratios)
+    min_ratio = min(worker_ratios)
+    if max_ratio == 0:
         return False
 
-    imbalance = (max_count - min_count) / max_count
+    # Calculate imbalance based on ratios (consistent with worker selection)
+    imbalance = (max_ratio - min_ratio) / max_ratio
     return imbalance >= (threshold_pct / 100.0)
 
 
