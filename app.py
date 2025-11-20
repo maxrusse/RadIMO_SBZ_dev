@@ -1580,6 +1580,173 @@ def get_admin_password():
         selection_logger.info("Error loading config.yaml:", e)
         return ""
 
+def run_operational_checks(context: str = 'unknown', force: bool = False) -> dict:
+    """
+    Run operational readiness checks for the system.
+
+    Args:
+        context: Context string describing where checks are being run from
+        force: Force re-run even if cached (currently always runs)
+
+    Returns:
+        Dictionary with:
+        - results: list of check results (name, status, detail)
+        - context: the context string
+        - timestamp: ISO format timestamp
+    """
+    results = []
+    now = get_local_berlin_now().isoformat()
+
+    # Check 1: Config file exists and is readable
+    try:
+        with open("config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        results.append({
+            'name': 'Config File',
+            'status': 'OK',
+            'detail': 'config.yaml is readable and valid YAML'
+        })
+    except Exception as e:
+        results.append({
+            'name': 'Config File',
+            'status': 'ERROR',
+            'detail': f'Failed to load config.yaml: {str(e)}'
+        })
+
+    # Check 2: Admin password is set (not default)
+    try:
+        admin_pw = get_admin_password()
+        if not admin_pw:
+            results.append({
+                'name': 'Admin Password',
+                'status': 'WARNING',
+                'detail': 'Admin password is not set in config.yaml'
+            })
+        elif admin_pw == 'change_pw_for_live':
+            results.append({
+                'name': 'Admin Password',
+                'status': 'WARNING',
+                'detail': 'Admin password is still set to default value - change for production!'
+            })
+        else:
+            results.append({
+                'name': 'Admin Password',
+                'status': 'OK',
+                'detail': 'Admin password is configured'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Admin Password',
+            'status': 'ERROR',
+            'detail': f'Failed to check admin password: {str(e)}'
+        })
+
+    # Check 3: Upload folder exists and is writable
+    try:
+        upload_folder = app.config.get('UPLOAD_FOLDER', 'uploads')
+        if not os.path.exists(upload_folder):
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'WARNING',
+                'detail': f'Upload folder "{upload_folder}" does not exist (will be created on upload)'
+            })
+        elif not os.access(upload_folder, os.W_OK):
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'ERROR',
+                'detail': f'Upload folder "{upload_folder}" is not writable'
+            })
+        else:
+            file_count = len([f for f in os.listdir(upload_folder) if f.endswith('.xlsx')])
+            results.append({
+                'name': 'Upload Folder',
+                'status': 'OK',
+                'detail': f'Upload folder "{upload_folder}" is writable ({file_count} Excel files found)'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Upload Folder',
+            'status': 'ERROR',
+            'detail': f'Failed to check upload folder: {str(e)}'
+        })
+
+    # Check 4: Modalities configured
+    try:
+        modality_count = len(allowed_modalities)
+        if modality_count == 0:
+            results.append({
+                'name': 'Modalities',
+                'status': 'ERROR',
+                'detail': 'No modalities configured in config.yaml'
+            })
+        else:
+            results.append({
+                'name': 'Modalities',
+                'status': 'OK',
+                'detail': f'{modality_count} modalities configured: {", ".join(allowed_modalities)}'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Modalities',
+            'status': 'ERROR',
+            'detail': f'Failed to check modalities: {str(e)}'
+        })
+
+    # Check 5: Skills configured
+    try:
+        skill_count = len(SKILL_COLUMNS)
+        if skill_count == 0:
+            results.append({
+                'name': 'Skills',
+                'status': 'ERROR',
+                'detail': 'No skills configured in config.yaml'
+            })
+        else:
+            results.append({
+                'name': 'Skills',
+                'status': 'OK',
+                'detail': f'{skill_count} skills configured: {", ".join(SKILL_COLUMNS)}'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Skills',
+            'status': 'ERROR',
+            'detail': f'Failed to check skills: {str(e)}'
+        })
+
+    # Check 6: Worker data loaded
+    try:
+        total_workers = 0
+        for mod in allowed_modalities:
+            d = modality_data.get(mod, {})
+            if d.get('working_hours_df') is not None:
+                total_workers += len(d['working_hours_df']['PPL'].unique())
+
+        if total_workers == 0:
+            results.append({
+                'name': 'Worker Data',
+                'status': 'WARNING',
+                'detail': 'No worker data loaded - upload an Excel file to get started'
+            })
+        else:
+            results.append({
+                'name': 'Worker Data',
+                'status': 'OK',
+                'detail': f'{total_workers} workers loaded across all modalities'
+            })
+    except Exception as e:
+        results.append({
+            'name': 'Worker Data',
+            'status': 'ERROR',
+            'detail': f'Failed to check worker data: {str(e)}'
+        })
+
+    return {
+        'results': results,
+        'context': context,
+        'timestamp': now
+    }
+
 # --- Create a decorator to protect admin routes:
 def admin_required(f):
     @wraps(f)

@@ -251,9 +251,9 @@ Main Entry Point (/) ───────────────────�
     {% for skill in skill_definitions %}
       <label>{{ skill.label }}:</label>
       <select name="{{ skill.form_key }}">
+        <option value="-1">-1</option>
         <option value="0">0</option>
         <option value="1">1</option>
-        <option value="2">2</option>
       </select>
     {% endfor %}
     
@@ -263,7 +263,7 @@ Main Entry Point (/) ───────────────────�
 </div>
 
 <!-- Legend: Skill Value Meaning -->
-<small>Gewichtung: 0 = Ausschluss, 1 = Normale Einteilung, 2 = Bevorzugt</small>
+<small>Gewichtung: -1 = Ausschluss, 0 = Nur Fallback (passiv), 1 = Aktiv</small>
 ```
 
 5. **Timeline Visualization:**
@@ -1315,17 +1315,17 @@ document.addEventListener("DOMContentLoaded", function() {
 
 ```html
 <select id="{{ skill.form_key }}" name="{{ skill.form_key }}">
+  <option value="-1">-1</option>
   <option value="0">0</option>
   <option value="1">1</option>
-  <option value="2">2</option>
 </select>
 ```
 
 **Skill Value Meanings** (legend in upload.html, line 521):
 ```
-0 = Ausschluss       (Excluded - not available)
-1 = Normale Einteilung (Active - normal priority)
-2 = Bevorzugt        (Preferred - higher priority up to 125%)
+-1 = Ausschluss      (Excluded - not available even in fallback)
+ 0 = Passiv          (Passive - only available in fallback, not primary)
+ 1 = Aktiv           (Active - available for primary and fallback requests)
 ```
 
 **Backend Implementation** (app.py, lines 830-860):
@@ -1376,14 +1376,39 @@ def _attempt_column_selection(
 | **Real-time Updates** | Auto-refresh every 60 seconds via quick_reload endpoint |
 | **Statistics** | Modality-specific + cross-modality tables with weighted counts |
 | **Timeline Library** | VIS.js for time-based worker schedule visualization |
-| **Skill Selection** | 3-value system (0=excluded, 1=active, 2=preferred) |
+| **Skill Selection** | 3-value system (-1=excluded, 0=passive, 1=active) |
 | **Work Distribution** | Weighted calculation: skill_weight × modifier × modality_factor |
 | **File Format** | Excel (.xlsx) with Tabelle1 (data) and Tabelle2 (info) sheets |
 | **Automatic Features** | Clipboard copy (abbreviations), Timer display, Active worker highlighting |
 
 ---
 
-## KNOWN ISSUE
+## OPERATIONAL CHECKS
 
-**Missing Function:** `run_operational_checks()` is called in app.py (lines 1712, 2055) but never defined. This function should return operational system check results. Current implementation will fail when trying to render the operational checks section.
+**Function:** `run_operational_checks(context, force)` is implemented in app.py (lines 1583-1748) and provides system readiness validation.
+
+**Checks performed:**
+1. Config file (config.yaml readable and valid YAML)
+2. Admin password (set and not default value)
+3. Upload folder (exists and writable, counts Excel files)
+4. Modalities (configured count and list)
+5. Skills (configured count and list)
+6. Worker data (total workers loaded across modalities)
+
+**Return format:**
+```python
+{
+  'results': [
+    {'name': 'Check Name', 'status': 'OK|WARNING|ERROR', 'detail': 'Details'},
+    ...
+  ],
+  'context': 'admin_view|reload|cli',
+  'timestamp': '2025-11-20T07:00:00+01:00'
+}
+```
+
+**Used in:**
+- Admin panel (upload.html) - displays system checks section
+- Quick reload API - validates system state
+- ops_check.py CLI tool - pre-deployment verification
 

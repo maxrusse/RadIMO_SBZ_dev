@@ -506,9 +506,9 @@
                     {{ skill.label }}:
                   </label>
                   <select id="{{ skill.form_key }}" name="{{ skill.form_key }}" style="width: 40px; padding: 0.2rem; border-radius: 3px; text-align: center;">
+                    <option value="-1">-1</option>
                     <option value="0">0</option>
                     <option value="1">1</option>
-                    <option value="2">2</option>
                   </select>
                 </div>
               {% endfor %}
@@ -518,7 +518,7 @@
           <!-- Legend as small plain text matching other help text format -->
           <div class="form-group" style="margin-bottom: 0.5rem;">
             <small style="font-size: 0.7rem;">
-              Gewichtung: 0 = Ausschluss, 1 = Normale Einteilung, 2 = Bevorzugt bis 125%
+              Gewichtung: -1 = Ausschluss, 0 = Nur Fallback (passiv), 1 = Aktiv
             </small>
           </div>
 
