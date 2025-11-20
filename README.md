@@ -723,12 +723,26 @@ RadIMO_SBZ_DEV/
 
 Comprehensive documentation available in the `docs/` folder:
 
-- **[WORKFLOW.md](docs/WORKFLOW.md)** - Complete medweb CSV workflow, upload strategies, prep page usage
-- **[SYSTEM_ANALYSIS.md](docs/SYSTEM_ANALYSIS.md)** - Complete system analysis, fallback strategies, balancing algorithms
+### Current Version (v18.2)
+- **[SYSTEM_ANALYSIS_V18.md](docs/SYSTEM_ANALYSIS_V18.md)** ← **PRIMARY DOCUMENTATION**
+  - Complete v18.2 architecture
+  - Live/Staged separation architecture
+  - Three-page admin system (Skill Roster, Prep Next Day, Live Edit)
+  - Medweb CSV integration
+  - Worker selection algorithms
+  - Code quality and maintenance
+
+### Workflow & Integration
+- **[WORKFLOW.md](docs/WORKFLOW.md)** - Medweb CSV workflow, upload strategies, prep page usage
+- **[INTEGRATION_COMPARISON.md](docs/INTEGRATION_COMPARISON.md)** - Why config-driven CSV approach
+- **[EXCEL_PATH_MIGRATION.md](docs/EXCEL_PATH_MIGRATION.md)** - Why Excel upload was removed
+
+### Frontend & Testing
 - **[FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)** - UI structure, templates, API integration
 - **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - Testing strategies, edge cases, validation
-- **[INTEGRATION_COMPARISON.md](docs/INTEGRATION_COMPARISON.md)** - Why config-driven CSV approach was chosen
-- **[EXCEL_PATH_MIGRATION.md](docs/EXCEL_PATH_MIGRATION.md)** - Why Excel upload path was removed
+
+### Historical Reference
+- **[SYSTEM_ANALYSIS.md](docs/SYSTEM_ANALYSIS.md)** - v17 & v18.0 (partially outdated, see V18.md for current)
 
 ---
 

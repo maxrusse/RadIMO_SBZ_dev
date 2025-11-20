@@ -1,6 +1,19 @@
 # RadIMO SBZ - Complete System Analysis
 
-**Note:** This document was originally created for v17 (Excel-based uploads). Some sections have been updated for v18 (medweb CSV integration).
+**⚠️ IMPORTANT: This document describes v17 and partial v18.0 architecture.**
+
+**📘 For CURRENT v18.2 documentation, see:** [**SYSTEM_ANALYSIS_V18.md**](SYSTEM_ANALYSIS_V18.md)
+
+**What's in v18.2 (not documented here):**
+- ✅ Live/Staged data separation (critical fix)
+- ✅ Three-page admin system (Skill Roster, Prep Next Day, Live Edit)
+- ✅ Activation mechanism (staged → live)
+- ✅ Code quality improvements
+- ✅ Complete architecture overview
+
+---
+
+**Note:** This document was originally created for v17 (Excel-based uploads). Some sections have been updated for v18.0 (medweb CSV integration) but it does NOT include v18.1-v18.2 changes.
 
 ## Table of Contents
 1. [Excel File Handling](#excel-file-handling---obsolete) - Historical v17 system (see [WORKFLOW.md](WORKFLOW.md) for current v18 workflow)
