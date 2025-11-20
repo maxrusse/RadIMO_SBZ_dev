@@ -2,7 +2,7 @@
 
 **Radiology: Innovation, Management & Orchestration**
 
-Smart worker assignment system for radiology teams with automatic load balancing, flexible fallback strategies, and overlapping shift support.
+Smart worker assignment system for radiology teams with automatic load balancing, flexible fallback strategies, and config-driven medweb CSV integration.
 
 ---
 
@@ -16,7 +16,9 @@ RadIMO orchestrates workload distribution for radiology teams across multiple mo
 - ⏰ Dynamic shift handling with work-hour-adjusted balancing
 - 📱 Two UI modes: by modality or by skill
 - 📈 Cross-modality workload tracking and overflow management
-- 📁 Excel-based schedule management with automatic backup
+- 🔮 **Config-driven medweb CSV integration** with automated daily preload
+- 📝 **Next-day schedule preparation** with simple and advanced editing modes
+- ⚙️ **Worker skill roster system** for per-worker, per-modality skill overrides
 
 ---
 
@@ -39,30 +41,98 @@ flask --app app run --debug
 
 - **Main Interface**: `http://localhost:5000/` - By modality view
 - **Skill View**: `http://localhost:5000/by-skill` - By skill view
-- **Admin Panel**: `http://localhost:5000/upload` - Upload schedules & statistics
+- **Admin Panel**: `http://localhost:5000/upload` - Upload medweb CSV & manage schedules
+- **Prep Page**: `http://localhost:5000/prep-next-day` - Prepare tomorrow's schedule
 - **Timeline**: `http://localhost:5000/timetable` - Visualize shifts
 
 ---
 
 ## ✨ Key Features
 
-### 1. **Dual View Modes**
+### 1. **Config-Driven Medweb CSV Integration** ⭐ NEW
+
+Directly ingest medweb CSV schedules with configuration-based activity mapping:
+
+```yaml
+medweb_mapping:
+  rules:
+    - match: "CT Spätdienst"
+      modality: "ct"
+      shift: "Spaetdienst"
+      base_skills: {Normal: 1, Notfall: 1, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+
+    - match: "MR Assistent 1. Monat"
+      modality: "mr"
+      shift: "Fruehdienst"
+      base_skills: {Normal: 1, Notfall: 0, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+```
+
+**Benefits:**
+- No manual Excel file creation needed
+- Activity → modality/skill mapping in config.yaml
+- Extensible: add new activities by updating config
+- Single CSV upload populates all modalities
+
+### 2. **Automatic Daily Preload** ⏰ NEW
+
+System automatically preloads the next workday schedule at **7:30 AM CET**:
+
+- **Auto-preload**: Runs daily via APScheduler
+- **Next workday logic**: Friday → Monday, other days → tomorrow
+- **Master CSV**: Last uploaded CSV becomes source for auto-preload
+- **Seamless workflow**: No manual intervention required
+
+### 3. **Next-Day Schedule Preparation** 📝 NEW
+
+Advanced edit interface for preparing tomorrow's schedule:
+
+**Two Modes:**
+- **Simple Mode**: Click any cell to edit inline (spreadsheet-like UX)
+- **Advanced Mode**: Add/delete workers, bulk skill operations
+
+**Features:**
+- Modality tabs (CT/MR/XRAY) for easy navigation
+- Color-coded skill values: 🟢 Active (1), 🟡 Passive (0), 🔴 Excluded (-1)
+- Real-time change tracking with batch save
+- Auto-recalculate shift durations when times change
+- Completely separate from same-day editing (preserves assignment stability)
+
+### 4. **Worker Skill Roster System** 👥 NEW
+
+Per-worker skill overrides with modality-specific configuration:
+
+```yaml
+worker_skill_roster:
+  AAn:  # Alona Anzalone
+    default:
+      Msk: 1      # MSK specialist
+
+  AN:  # Andrea Nedelcu
+    default:
+      Chest: 1    # Chest specialist
+    ct:
+      Notfall: 0  # Only fallback for CT Notfall
+```
+
+**Configuration Precedence**: `worker_skill_roster` > `medweb_mapping` > worker mapping
+
+### 5. **Dual View Modes**
 
 Choose your workflow:
 
 - **By Modality** (default): Navigate by modality (CT/MR/XRAY) → assign by skill
-- **By Skill** (new): Navigate by skill (Normal/Notfall/Herz) → assign by modality
+- **By Skill**: Navigate by skill (Normal/Notfall/Herz) → assign by modality
 
 Toggle between views with one click!
 
-### 2. **Smart Load Balancing**
+### 6. **Smart Load Balancing**
 
 - **Work-hour-adjusted ratios**: Balances workload based on hours worked, not just assignment count
 - **Overlapping shift support**: Handles early/late starters fairly
 - **30% imbalance threshold**: Automatic fallback when workload becomes unfair
 - **Minimum assignments**: Ensures everyone gets at least 5 assignments before overloading others
 
-### 3. **Flexible Fallback Strategies**
+### 7. **Flexible Fallback Strategies**
 
 Three modes to handle overflow:
 
@@ -80,7 +150,7 @@ balancer:
   min_assignments_per_skill: 5
 ```
 
-### 4. **Skill Value System**
+### 8. **Skill Value System**
 
 Fine-tune worker availability:
 
@@ -90,16 +160,29 @@ Fine-tune worker availability:
 | **0** | Passive | Available ONLY in fallback (training, backup) |
 | **-1** | Excluded | NOT available (on leave, restricted) |
 
-### 5. **Automatic Scheduling**
-
-- **Immediate upload**: Replace schedule instantly via admin panel
-- **Scheduled upload**: Stage files for 07:30 CET daily reset
-- **Automatic backup**: Every upload backed up for recovery
-- **Cross-modality tracking**: Global workload statistics across all teams
-
 ---
 
 ## 📊 How It Works
+
+### Medweb CSV to Assignment Flow
+
+```
+medweb.csv (monthly schedule from medweb)
+    ↓
+Upload via /upload (manual) or auto-preload at 7:30 AM
+    ↓
+Config-driven parsing (medweb_mapping rules)
+    ↓
+Apply worker_skill_roster overrides
+    ↓
+Build working_hours_df per modality (CT/MR/XRAY)
+    ↓
+Optional: Edit via /prep-next-day
+    ↓
+Real-time assignment system (balancer)
+    ↓
+Request: CT/Herz → Assign worker with lowest ratio
+```
 
 ### Assignment Flow
 
@@ -126,7 +209,7 @@ ratio = weighted_assignments / hours_worked_till_now
 # Weighted assignments consider:
 - Skill weight (Notfall=1.1, Privat=1.2, Normal=1.0, etc.)
 - Modality factor (MR=1.2, CT=1.0, XRAY=0.33)
-- Worker modifier (individual multipliers from Excel)
+- Worker modifier (individual multipliers from config/CSV)
 
 # Lower ratio = less loaded = selected
 ```
@@ -173,6 +256,17 @@ skills:
     weight: 1.2
     optional: true
     special: true
+  Privat:
+    weight: 1.2
+    optional: true
+  Msk:
+    weight: 1.1
+    optional: true
+    special: true
+  Chest:
+    weight: 1.1
+    optional: true
+    special: true
 
 # Balancing
 balancer:
@@ -185,13 +279,74 @@ balancer:
   fallback_chain:
     Normal: []
     Notfall: [Normal]
+    Privat: [Normal]
     Herz: [[Notfall, Normal]]  # Parallel fallback
+    Msk: [[Notfall, Normal]]
+    Chest: [[Notfall, Normal]]
 
 # Modality overflow
 modality_fallbacks:
   xray: [[ct, mr]]  # XRAY can borrow from both CT and MR
   ct: [mr]          # CT can borrow from MR
   mr: []            # MR cannot borrow
+
+# Medweb CSV mapping (NEW)
+medweb_mapping:
+  rules:
+    - match: "CT Spätdienst"
+      modality: "ct"
+      shift: "Spaetdienst"
+      base_skills: {Normal: 1, Notfall: 1, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+
+    - match: "CT Assistent"
+      modality: "ct"
+      shift: "Fruehdienst"
+      base_skills: {Normal: 1, Notfall: 1, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+
+    - match: "MR Assistent 1. Monat"
+      modality: "mr"
+      shift: "Fruehdienst"
+      base_skills: {Normal: 1, Notfall: 0, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+
+    - match: "Chir Assistent"
+      modality: "xray"  # Chir → xray mapping
+      shift: "Fruehdienst"
+      base_skills: {Normal: 1, Notfall: 1, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+
+# Shift times (NEW)
+shift_times:
+  Fruehdienst:
+    default: "07:00-15:00"
+    friday: "07:00-13:00"
+  Spaetdienst:
+    default: "13:00-21:00"
+    friday: "13:00-19:00"
+
+# Worker skill roster (NEW)
+worker_skill_roster:
+  AAn:  # Alona Anzalone
+    default:
+      Msk: 1      # MSK specialist
+
+  AN:  # Andrea Nedelcu
+    default:
+      Chest: 1    # Chest specialist
+    ct:
+      Notfall: 0  # Only fallback for CT Notfall
+
+  DEMO1:
+    default:
+      Herz: 1     # Cardiac specialist
+      Msk: -1     # Never for Msk
+
+  DEMO2:
+    default:
+      Privat: 1   # Private patients only
+      Normal: 0   # Only fallback for Normal
+
+  DEMO3:
+    default:
+      Notfall: -1  # First month assistant - no Notfall
 ```
 
 ---
@@ -232,6 +387,70 @@ GET /api/quick_reload?modality=ct
 GET /api/quick_reload?skill=herz
 ```
 
+### Medweb CSV Upload (NEW)
+
+```bash
+# Upload medweb CSV for specific date
+POST /upload
+Content-Type: multipart/form-data
+- file: medweb.csv
+- target_date: 2025-11-21
+
+# Preload next workday (Friday → Monday logic)
+POST /preload-next-day
+Content-Type: multipart/form-data
+- file: medweb.csv
+
+# Force refresh today (EMERGENCY - destroys all counters)
+POST /force-refresh-today
+Content-Type: multipart/form-data
+- file: medweb.csv
+```
+
+### Next-Day Preparation (NEW)
+
+```bash
+# Get current working_hours_df data for all modalities
+GET /api/prep-next-day/data
+
+# Update a single worker row
+POST /api/prep-next-day/update-row
+Content-Type: application/json
+{
+  "modality": "ct",
+  "row_index": 5,
+  "updates": {
+    "start_time": "08:00",
+    "end_time": "16:00",
+    "Normal": 1,
+    "Notfall": 0
+  }
+}
+
+# Add a new worker
+POST /api/prep-next-day/add-worker
+Content-Type: application/json
+{
+  "modality": "mr",
+  "worker_data": {
+    "PPL": "Neuer Worker (NW)",
+    "start_time": "07:00",
+    "end_time": "15:00",
+    "Normal": 1,
+    "Notfall": 1,
+    ...
+  }
+}
+
+# Delete a worker
+POST /api/prep-next-day/delete-worker
+Content-Type: application/json
+{
+  "modality": "xray",
+  "row_index": 3
+}
+```
+
 ---
 
 ## 📁 Project Structure
@@ -239,26 +458,29 @@ GET /api/quick_reload?skill=herz
 ```
 RadIMO_SBZ_DEV/
 ├── app.py                      # Main Flask application
-├── config.yaml                 # Configuration file
+├── config.yaml                 # Configuration file (medweb_mapping, roster, etc.)
 ├── ops_check.py               # Pre-deployment checks
 ├── requirements.txt           # Python dependencies
+├── BACKUP.md                  # Rollback procedure for Excel upload code
 ├── templates/
 │   ├── index.html             # By-modality view
 │   ├── index_by_skill.html    # By-skill view
-│   ├── upload.html            # Admin panel
+│   ├── upload.html            # Admin panel (medweb CSV upload)
+│   ├── prep_next_day.html     # Next-day schedule preparation (NEW)
 │   ├── timetable.html         # Timeline visualization
 │   └── login.html             # Authentication
 ├── static/
 │   ├── vis.js                 # Timeline library
 │   └── favicon.ico
-├── uploads/                   # Excel schedule files
-│   ├── SBZ_ct.xlsx           # Current CT schedule
-│   ├── SBZ_mr.xlsx           # Current MR schedule
-│   └── SBZ_xray.xlsx         # Current XRAY schedule
+├── uploads/                   # Medweb CSV storage
+│   └── master_medweb.csv      # Master CSV for auto-preload
 └── docs/                      # Documentation
     ├── SYSTEM_ANALYSIS.md     # Complete technical analysis
     ├── FRONTEND_ARCHITECTURE.md  # UI architecture details
-    └── TESTING_GUIDE.md       # Testing strategies
+    ├── TESTING_GUIDE.md       # Testing strategies
+    ├── WORKFLOW.md            # Complete medweb CSV workflow (NEW)
+    ├── INTEGRATION_COMPARISON.md  # Why config-driven approach
+    └── EXCEL_PATH_MIGRATION.md    # Why Excel upload was removed
 ```
 
 ---
@@ -267,33 +489,44 @@ RadIMO_SBZ_DEV/
 
 Comprehensive documentation available in the `docs/` folder:
 
+- **[WORKFLOW.md](docs/WORKFLOW.md)** - Complete medweb CSV workflow, upload strategies, prep page usage
 - **[SYSTEM_ANALYSIS.md](docs/SYSTEM_ANALYSIS.md)** - Complete system analysis, fallback strategies, balancing algorithms
 - **[FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)** - UI structure, templates, API integration
 - **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - Testing strategies, edge cases, validation
+- **[INTEGRATION_COMPARISON.md](docs/INTEGRATION_COMPARISON.md)** - Why config-driven CSV approach was chosen
+- **[EXCEL_PATH_MIGRATION.md](docs/EXCEL_PATH_MIGRATION.md)** - Why Excel upload path was removed
 
 ---
 
-## 🎨 Excel File Format
+## 📋 Medweb CSV Format
 
-### Tabelle1 (Schedule Data)
+RadIMO ingests monthly schedules from medweb in CSV format:
+
+### Expected Columns
 
 | Column | Description | Example |
 |--------|-------------|---------|
-| PPL | Worker name | Dr. Anna Müller |
-| Kürzel | Abbreviation | AM |
-| VON | Start time | 07:00 |
-| BIS | End time | 13:00 |
-| Modifier | Individual weight | 1.0 |
-| Normal | Skill value (1/0/-1) | 1 |
-| Notfall | Skill value (1/0/-1) | 1 |
-| Privat | Skill value (1/0/-1) | 0 |
-| Herz | Skill value (1/0/-1) | 1 |
-| Msk | Skill value (1/0/-1) | -1 |
-| Chest | Skill value (1/0/-1) | 0 |
+| Datum | Date in DD.MM.YYYY | 20.11.2025 |
+| Tageszeit | Day period (ignored) | Tag |
+| Personalnummer | Employee number | 12345 |
+| Code des Mitarbeiters | Worker abbreviation | AM |
+| Name des Mitarbeiters | Worker full name | Dr. Anna Müller |
+| Beschreibung der Aktivität | Activity description | CT Spätdienst |
 
-### Tabelle2 (Info Texts)
+### Activity Mapping
 
-Display messages on the main interface (one message per row).
+Activities are mapped to modalities and skills via `config.yaml`:
+
+| Activity | Modality | Shift | Example Skills |
+|----------|----------|-------|----------------|
+| CT Assistent | ct | Fruehdienst | Normal=1, Notfall=1 |
+| CT Spätdienst | ct | Spaetdienst | Normal=1, Notfall=1 |
+| MR Assistent | mr | Fruehdienst | Normal=1, Notfall=1 |
+| MR Assistent 1. Monat | mr | Fruehdienst | Normal=1, Notfall=0 |
+| Chir Assistent | xray | Fruehdienst | Normal=1, Notfall=1 |
+| SBZ: MRT-OA | mr | Fruehdienst | Privat=1 (PP role) |
+
+Add new activity mappings by updating `medweb_mapping.rules` in `config.yaml`.
 
 ---
 
@@ -319,6 +552,7 @@ python ops_check.py
 - ✅ Upload folder writable
 - ✅ Modalities configured
 - ✅ Skills configured
+- ✅ Medweb mapping rules present
 - ✅ Worker data loaded
 
 ---
@@ -337,9 +571,24 @@ Configure modality fallbacks to point to other campuses for remote coverage.
 ### Training & Backup Staff
 Use passive skill values (0) for workers who can help but shouldn't be primary choice.
 
+### Next-Day Planning
+Use prep page to review and adjust tomorrow's schedule before auto-preload activates.
+
+### Emergency Schedule Changes
+Use force refresh when significant staffing changes occur mid-day (e.g., half the staff calls in sick).
+
 ---
 
 ## 🔄 Recent Updates
+
+### v18 (November 2025)
+- ✨ **Config-driven medweb CSV integration** - Direct CSV ingestion with mapping rules
+- ⏰ **Automatic daily preload** - 7:30 AM auto-preload via APScheduler
+- 📝 **Next-day schedule preparation** - Advanced edit page with simple/advanced modes
+- 👥 **Worker skill roster system** - Per-worker, per-modality skill overrides
+- 🔄 **Force refresh capability** - Emergency same-day schedule reload
+- 🗑️ **Excel upload removal** - Simplified to single CSV-driven workflow
+- 📊 **Master CSV pattern** - Last upload becomes source for auto-preload
 
 ### v17 (November 2025)
 - ✨ Added skill-based navigation view (`/by-skill`)
@@ -350,9 +599,56 @@ Use passive skill values (0) for workers who can help but shouldn't be primary c
 
 ---
 
+## 🔧 Configuration Tips
+
+### Adding a New Activity Type
+
+1. Add rule to `config.yaml`:
+```yaml
+medweb_mapping:
+  rules:
+    - match: "Neue Aktivität"
+      modality: "ct"
+      shift: "Fruehdienst"
+      base_skills: {Normal: 1, Notfall: 1, Privat: 0, Herz: 0, Msk: 0, Chest: 0}
+```
+
+2. Restart application (no code changes needed!)
+
+### Configuring Worker-Specific Skills
+
+1. Add to `worker_skill_roster` in `config.yaml`:
+```yaml
+worker_skill_roster:
+  NEUID:  # Worker abbreviation
+    default:  # Applies to all modalities
+      Normal: 1
+      Notfall: 1
+      Herz: 1      # This worker does Herz
+      Msk: -1      # Never for Msk
+    mr:            # MR-specific overrides
+      Herz: 0      # Only fallback for MR Herz
+```
+
+2. Restart application
+
+### Adjusting Shift Times
+
+1. Modify `shift_times` in `config.yaml`:
+```yaml
+shift_times:
+  Fruehdienst:
+    default: "07:30-15:30"  # Changed from 07:00-15:00
+    friday: "07:30-13:30"
+```
+
+2. Restart application
+
+---
+
 ## 📄 License & Contact
 
-**RadIMO v17** - Radiology: Innovation, Management & Orchestration
+**RadIMO v18** - Radiology: Innovation, Management & Orchestration
 
 For more information, see [EULA.txt](static/EULA.txt) or contact **Dr. M. Russe**.
 
@@ -362,9 +658,10 @@ For more information, see [EULA.txt](static/EULA.txt) or contact **Dr. M. Russe*
 
 This is a specialized medical workload distribution system. For questions or suggestions:
 
-1. Review the [System Analysis](docs/SYSTEM_ANALYSIS.md) documentation
-2. Check the [Testing Guide](docs/TESTING_GUIDE.md) for validation strategies
-3. Understand the [Frontend Architecture](docs/FRONTEND_ARCHITECTURE.md)
+1. Review the [Complete Workflow](docs/WORKFLOW.md) documentation
+2. Check the [System Analysis](docs/SYSTEM_ANALYSIS.md) for technical details
+3. Understand the [Integration Comparison](docs/INTEGRATION_COMPARISON.md) for architectural decisions
+4. Read the [Testing Guide](docs/TESTING_GUIDE.md) for validation strategies
 
 ---
 
